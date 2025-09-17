@@ -18,8 +18,6 @@ define( 'INSTAGRAM_FEEDS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 require_once INSTAGRAM_FEEDS_PLUGIN_DIR . 'includes/access-token-manager.php';
 // インスタグラムのfeed管理をまとめたファイル
 require_once INSTAGRAM_FEEDS_PLUGIN_DIR . 'includes/instagram-feed-manager.php';
-// 表示用ショートコード周りの処理をまとめたファイル
-require_once INSTAGRAM_FEEDS_PLUGIN_DIR . 'includes/short-code-manager.php';
 
 // 管理画面メニューとサブメニューの追加
 function instagram_feeds_add_admin_menu() {
@@ -89,3 +87,9 @@ function instagram_token_refresher_deactivate() {
 }
 register_deactivation_hook(__FILE__, 'instagram_token_refresher_deactivate');
 
+
+
+// --- YouTube追加機能 ---
+require_once plugin_dir_path(__FILE__) . 'includes/youtube-account-manager.php';
+require_once plugin_dir_path(__FILE__) . 'includes/youtube-feed-manager.php';
+require_once plugin_dir_path(__FILE__) . 'includes/short-code-manager.php';
