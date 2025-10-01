@@ -105,7 +105,27 @@ function fetch_youtube_shorts_feed($account_post_id) {
                 'fields'         => 'ids',
                 'posts_per_page' => 1,
             ]);
+
+            // 登録済みの場合、サムネイルの存在チェックを行い、死んでいたらpost非公開
             if (!empty($existing)) {
+                // // 投稿ID取得
+                // $exsiting_id = $existing[0]->ID;
+                
+                // // サムネイルURL取得
+                // $exsiting_url = get_post_meta( $exsiting_id, '_instagram_feed_thumbnail_url', true );
+
+                // // サムネイル画像の生存チェック
+                // if(!check_image_exists_wp($exsiting_url)) {
+                //     // し、死んでる.....!!
+                //     wp_update_post([
+                //         'ID'          => $exsiting_id,       // 対象の投稿ID
+                //         'post_status' => 'private',      // 非公開
+                //     ]);
+                    
+
+                //     error_log("[YouTube Shorts] noexisting thumbnail, delete: {$video_id}");
+                // }
+
                 error_log("[YouTube Fetch] Duplicate found, skipping: {$video_id}");
                 continue;
             }

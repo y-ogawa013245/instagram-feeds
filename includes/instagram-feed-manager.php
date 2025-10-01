@@ -28,6 +28,8 @@ add_action('init', 'create_instagram_feed_post_type');
 
 // Instagram APIからフィードを取得する関数
 function fetch_instagram_feed() {
+	error_log('fetch start');
+	
     // instagramアカウント全部取る
     $posts = get_all_instagram_account_posts();
 
@@ -35,11 +37,11 @@ function fetch_instagram_feed() {
         // post_idってやつよ
         $account_id = $post->ID;
 
-        // 'instagram_account' 投稿のメタデータから API ID と Access Token を取得
+		error_log('account:: ' . $account_id);
+		
         $api_id = get_post_meta($account_id, '_instagram_api_id', true);
         $access_token = get_post_meta($account_id, '_instagram_access_token', true);
 
-        // 一応データチェック
         if (!$api_id || !$access_token) {
             return wp_die( new WP_Error('post_creation_failed', 'データ足りねぇゾォぉぉおお！！栗原ぁぁああああ！！'), null, array('back_link' => true) );
         }
@@ -48,6 +50,8 @@ function fetch_instagram_feed() {
         $api_url = 'https://graph.facebook.com/v20.0/' . $api_id . '/media?fields=id,caption,thumbnail_url,media_type,media_url,permalink,timestamp&limit=50&access_token=' . $access_token;
         $all_feeds = array();
 
+		error_log('api_url:: ' . $api_url);
+		
         // ページネーションで全てのフィードを取得
         while ($api_url) {
             // APIリクエストを送信
@@ -55,6 +59,7 @@ function fetch_instagram_feed() {
 
             // エラーチェック
             if (is_wp_error($response)) {
+				error_log('wp_remote_get error:: ' . $api_url);
                 return wp_die( new WP_Error('post_creation_failed', $response->get_error_message()), null, array('back_link' => true) );
             }
 
@@ -101,6 +106,23 @@ function fetch_instagram_feed() {
                 while($existing_feed->have_posts()) {
                     $existing_feed->the_post();
                     $post_id = get_the_ID();
+
+                    // サムネイルURL取得
+                    $exsiting_url = get_post_meta( $post_id, '_instagram_feed_thumbnail_url', true );
+
+                    // サムネイル画像の生存チェック
+                    if(!check_image_exists_wp($exsiting_url)) {
+                        // し、死んでる.....!!
+                        wp_update_post([
+                            'ID'          => $post_id,       // 対象の投稿ID
+                            'post_status' => 'private',      // 非公開
+                        ]);
+                        
+                        error_log("[instagram feed] noexisting thumbnail, private: {$post_id}");
+                    }else {
+						wp_update_post([ 'ID' => $post_id, 'post_status' => 'publish' ]);
+                        error_log("[instagram feed] updated thumbnail, publish: {$post_id}");
+					}
                 }
             }
 
@@ -116,8 +138,9 @@ function fetch_instagram_feed() {
                 $youtube_url = $matches[0];
             }
 
-            // 念のためpost_idがる時しか更新しない
+            // 念のためpost_idがある時しか更新しない
             if ($post_id) {
+				error_log("new thumbnail:: " . $image_url . "\n");
                 // カスタムフィールドにデータを保存
                 update_post_meta($post_id, '_instagram_api_id', $api_id);
                 update_post_meta($post_id, '_instagram_feed_id', $feed_item['id']);
@@ -255,3 +278,14 @@ function save_instagram_feed_meta($post_id) {
     }
 }
 add_action('save_post_instagram_feed', 'save_instagram_feed_meta');
+
+// カスタムスケジュールの追加
+// 最初は2ヶ月ごとだったけど、2ヶ月で切れるんだから余裕もって1ヶ月じゃないとダメじゃね？
+function add_custom_cron_schedule($schedules) {
+    $schedules['bi_monthly'] = array(
+        'interval' => 60 * 60 * 24 * 30, // 2ヶ月 (60日)
+        'display' => __('Every 1 Months')
+    );
+    return $schedules;
+}
+add_filter('cron_schedules', 'add_custom_cron_schedule');

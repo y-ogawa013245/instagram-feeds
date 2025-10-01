@@ -47,11 +47,15 @@ add_action('add_meta_boxes', 'instagram_account_add_meta_boxes');
 function instagram_account_meta_box_callback($post) {
     // 保存されているデータの取得
     $instagram_api_id = get_post_meta($post->ID, '_instagram_api_id', true);
+    $instagram_app_secret = get_post_meta($post->ID, '_instagram_app_secret', true);
     $instagram_access_token = get_post_meta($post->ID, '_instagram_access_token', true);
 
     ?>
     <label for="instagram_api_id">Instagram API ID:</label>
     <input type="text" id="instagram_api_id" name="instagram_api_id" value="<?php echo esc_attr($instagram_api_id); ?>" style="width:100%;"><br><br>
+
+    <label for="instagram_app_secret">Instagram APP SECRET:</label>
+    <input type="text" id="instagram_app_secret" name="instagram_app_secret" value="<?php echo esc_attr($instagram_app_secret); ?>" style="width:100%;"><br><br>
 
     <label for="instagram_access_token">Instagram 長期 Access Token:</label>
     <input type="text" id="instagram_access_token" name="instagram_access_token" value="<?php echo esc_attr($instagram_access_token); ?>" style="width:100%;"><br>
@@ -72,16 +76,19 @@ function instagram_account_save_postdata($post_id) {
     
     // 入力されてないフィールドがあっても何もしない
     // 何もするな....黄猿....
-    if (empty($_POST['instagram_api_id']) || empty($_POST['instagram_access_token'])) {
-        return;
+    if (empty($_POST['instagram_api_id']) 
+     || empty($_POST['instagram_app_secret'])
+     || empty($_POST['instagram_access_token'])) {
+            return;
     }
 
     // データをサニタイズ
     $app_id = sanitize_text_field($_POST['instagram_api_id']);
+    $secret = sanitize_text_field($_POST['instagram_app_secret']);
     $token  = sanitize_text_field($_POST['instagram_access_token']);
 
     // すでにそのデータがないか確認
-    if (is_instagram_account_registered($post_id, $app_id, $token)) {
+    if (is_instagram_account_registered($post_id, $app_id, $secret, $token)) {
         return wp_die( new WP_Error('api_error', 'すでにあんねん。'), null, array('back_link' => true) );
     }
 
@@ -129,16 +136,16 @@ function instagram_account_save_postdata($post_id) {
 
     // カスタムフィールドにAPI IDとアクセストークンを保存
     update_post_meta($post_id, '_instagram_api_id', $app_id);
+    update_post_meta($post_id, '_instagram_app_secret', $secret);
     update_post_meta($post_id, '_instagram_access_token', $token);
 
     // 無限ループ対策で解除してたhookの再設定。キモイ
     add_action('save_post_instagram_account', 'instagram_account_save_postdata');
 
-    // feed取得のcronを即時実行
-    do_action('fetch_instagram_feed_event');
-
-    // アクセストークンの更新処理失敗しやがる
-    // do_action('refresh_instagram_access_token_event');
+    // feed取得のcronを5分後に一度だけ実行（OK）
+    if ( ! wp_next_scheduled('fetch_instagram_feed_event') ) {
+        wp_schedule_single_event( time() + 5 * MINUTE_IN_SECONDS, 'fetch_instagram_feed_event' );
+    }
 }
 add_action('save_post_instagram_account', 'instagram_account_save_postdata');
 
@@ -159,7 +166,7 @@ function get_all_instagram_account_posts() {
 }
 
 // 登録済みかチェック
-function is_instagram_account_registered($post_id, $instagram_api_id, $instagram_access_token) {
+function is_instagram_account_registered($post_id, $instagram_api_id, $instagram_app_secret, $instagram_access_token) {
     // クエリの引数を設定
     $args = array(
         'post_type'  => 'instagram_account',
@@ -169,6 +176,11 @@ function is_instagram_account_registered($post_id, $instagram_api_id, $instagram
             array(
                 'key'   => '_instagram_api_id',
                 'value' => $instagram_api_id,
+                'compare' => '='
+            ),
+            array(
+                'key'   => '_instagram_app_secret',
+                'value' => $instagram_app_secret,
                 'compare' => '='
             ),
             array(
@@ -190,52 +202,79 @@ function is_instagram_account_registered($post_id, $instagram_api_id, $instagram
     return false;  // 未登録
 }
 
-// アクセストークンをリフレッシュする関数
+/**
+ * EAA（Graph）専用：各アカウントの meta から app_id / app_secret を取り、
+ * fb_exchange_token で延長する
+ */
 function refresh_instagram_access_token() {
-    // アカウント全部取る
     $accounts = get_all_instagram_account_posts();
+    if (empty($accounts)) return;
 
-    foreach($accounts as $account) {
-        // 現在のアクセストークンを取得
-        $api_id = get_post_meta($account->ID, '_instagram_api_id', true);
-        $access_token = get_post_meta($account->ID, '_instagram_access_token', true);
-
-        // リフレッシュトークンのAPIエンドポイント
-        $api_url = 'https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=' . $access_token;
-
-        $response = wp_remote_get($api_url);
-
-        // いちいちreturn しない
-        // 他のトークンは更新できるかも知れんし
-        if (is_wp_error($response)) {
-            error_log($account->post_title . ' : アクセストークン更新できんかった;; すでに切れたか、取ったばっかか知らんけど: ' . $response->get_error_message());
-            return wp_die( new WP_Error('post_creation_failed', 'アクセストークン更新できんかった;; すでに切れたか、取ったばっかか知らんけど'), null, array('back_link' => true) );
+    foreach ($accounts as $acc) {
+        $token = trim((string) get_post_meta($acc->ID, '_instagram_access_token', true));
+        if (!$token || strpos($token, 'EAA') !== 0) {
+            error_log("{$acc->post_title}: skip (token empty or not EAA)");
+            continue;
         }
 
-        $body = wp_remote_retrieve_body($response);
-        $data = json_decode($body, true);
+        // ★ 各アカウントごとの App ID / Secret をメタから取得
+        $app_id     = trim((string) get_post_meta($acc->ID, '_instagram_api_id', true));
+        $app_secret = trim((string) get_post_meta($acc->ID, '_instagram_app_secret', true));
 
-        if (!isset($data['access_token'])) {
-            error_log($account->post_title . ' : ないよぉ！新しいアクセストークンないヨォ！！！: ' . $body);
-            return wp_die( new WP_Error('post_creation_failed', 'ないよぉ！新しいアクセストークンないヨォ！！！' . $body), null, array('back_link' => true) );
+        if (empty($app_id) || empty($app_secret)) {
+            error_log("{$acc->post_title}: skip (missing app_id or app_secret in meta)");
+            continue;
         }
 
-        // 新しいアクセストークンを保存
-        update_post_meta($account->ID, '_instagram_access_token', sanitize_text_field($data['access_token']));
+        // 残存有効期限メタがあれば、必要なときだけ更新（任意）
+        $expires_in = (int) get_post_meta($acc->ID, '_instagram_access_token_expires_in', true);
+        $refreshed  = (int) get_post_meta($acc->ID, '_instagram_access_token_refreshed_at', true);
+        if ($expires_in && $refreshed) {
+            $expires_at = $refreshed + $expires_in;
+            $remain     = $expires_at - current_time('timestamp');
+            // 残り7日切ったら更新（好みで調整）
+            if ($remain > 7 * DAY_IN_SECONDS) {
+                error_log("{$acc->post_title}: skip (still valid >7d)");
+                continue;
+            }
+        }
+
+        // EAA 延長：/oauth/access_token?grant_type=fb_exchange_token
+        $url = add_query_arg(array(
+            'grant_type'        => 'fb_exchange_token',
+            'client_id'         => $app_id,
+            'client_secret'     => $app_secret,
+            'fb_exchange_token' => $token,
+        ), 'https://graph.facebook.com/v20.0/oauth/access_token');
+
+        error_log("refresh_url:: " . $url);
+        
+        $res  = wp_remote_get($url, array('timeout' => 20));
+        if (is_wp_error($res)) {
+            error_log("{$acc->post_title}: http " . $res->get_error_message());
+            continue;
+        }
+
+        $code = wp_remote_retrieve_response_code($res);
+        $body_raw = wp_remote_retrieve_body($res);
+        $body = json_decode($body_raw, true);
+
+        if ($code !== 200 || empty($body['access_token'])) {
+            error_log("{$acc->post_title}: refresh fail code={$code} body={$body_raw}");
+            continue;
+        }
+
+        // トークン更新＆メタ保存（壊さない：trimのみ）
+        $new_token = trim($body['access_token']);
+        update_post_meta($acc->ID, '_instagram_access_token', $new_token);
+
+        if (!empty($body['expires_in'])) {
+            update_post_meta($acc->ID, '_instagram_access_token_expires_in', (int) $body['expires_in']);
+            update_post_meta($acc->ID, '_instagram_access_token_refreshed_at', current_time('timestamp'));
+        }
+
+        error_log("{$acc->post_title}: token refreshed (code={$code})");
     }
-
-    // feed取得のcronを即時実行
-    // do_action('fetch_instagram_feed');
 }
 add_action('refresh_instagram_access_token_event', 'refresh_instagram_access_token');
 
-// カスタムスケジュールの追加
-// 最初は2ヶ月ごとだったけど、2ヶ月で切れるんだから余裕もって1ヶ月じゃないとダメじゃね？
-function add_custom_cron_schedule($schedules) {
-    $schedules['bi_monthly'] = array(
-        'interval' => 60 * 60 * 24 * 30, // 2ヶ月 (60日)
-        'display' => __('Every 1 Months')
-    );
-    return $schedules;
-}
-add_filter('cron_schedules', 'add_custom_cron_schedule');

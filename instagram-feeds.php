@@ -60,7 +60,7 @@ function instagram_token_refresher_activate() {
         wp_schedule_event(time(), 'bi_monthly', 'refresh_instagram_access_token_event');
     }
 }
-//register_activation_hook(__FILE__, 'instagram_token_refresher_activate');
+register_activation_hook(__FILE__, 'instagram_token_refresher_activate');
 
 // 1時間ごとにInstagramのフィードを取得するCronジョブをスケジュール
 function instagram_feed_schedule_cron() {
@@ -93,3 +93,6 @@ register_deactivation_hook(__FILE__, 'instagram_token_refresher_deactivate');
 require_once plugin_dir_path(__FILE__) . 'includes/youtube-account-manager.php';
 require_once plugin_dir_path(__FILE__) . 'includes/youtube-feed-manager.php';
 require_once plugin_dir_path(__FILE__) . 'includes/short-code-manager.php';
+
+// --- 共通処理追加 ---
+require_once plugin_dir_path(__FILE__) . 'includes/functions.php';

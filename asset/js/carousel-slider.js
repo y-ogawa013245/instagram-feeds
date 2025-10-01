@@ -4,14 +4,10 @@ jQuery(document).ready(function($) {
         speed: 40,
         slidesPerView: 3,
         maxBackfaceHiddenSlides: 3,
-        spaceBetween: 20,
+        spaceBetween: 10,
         freeMode: true,
         centeredSlides: false,
         preloadImages: false,
-        virtual: {
-            enabled: true, // バーチャルスライドを有効にします。
-            addSlidesAfter: 5, // 事前にレンダリングする枚数。スライドの枚数が入ります。
-        },        
         breakpoints: {
             // スマホ最大幅640px想定
             // 640px以上はタブレット判定
