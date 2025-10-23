@@ -15,7 +15,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 define( 'INSTAGRAM_FEEDS_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 
 // アクセストークンの管理をまとめたファイル
-require_once INSTAGRAM_FEEDS_PLUGIN_DIR . 'includes/access-token-manager.php';
+// require_once INSTAGRAM_FEEDS_PLUGIN_DIR . 'includes/access-token-manager.php';
+require_once INSTAGRAM_FEEDS_PLUGIN_DIR . 'includes/instagram-accont-manager.php';
 // インスタグラムのfeed管理をまとめたファイル
 require_once INSTAGRAM_FEEDS_PLUGIN_DIR . 'includes/instagram-feed-manager.php';
 
@@ -56,8 +57,8 @@ function instagram_feeds_overview_page() {
 // プラグインが有効化された時に実行される関数
 function instagram_token_refresher_activate() {
     // アクセストークン更新用cron設定(2ヶ月)
-    if (!wp_next_scheduled('refresh_instagram_access_token_event')) {
-        wp_schedule_event(time(), 'bi_monthly', 'refresh_instagram_access_token_event');
+    if (!wp_next_scheduled('ig_refresh_tokens_event')) {
+        wp_schedule_event(time(), 'bi_monthly', 'ig_refresh_tokens_event');
     }
 }
 register_activation_hook(__FILE__, 'instagram_token_refresher_activate');
@@ -74,9 +75,9 @@ add_action('wp', 'instagram_feed_schedule_cron');
 // プラグインが無効化された時に実行される関数
 function instagram_token_refresher_deactivate() {
     // アクセストークン更新cronの削除
-    $ac_timestamp = wp_next_scheduled('refresh_instagram_access_token_event');
+    $ac_timestamp = wp_next_scheduled('ig_refresh_tokens_event');
     if ($ac_timestamp) {
-        wp_unschedule_event($ac_timestamp, 'refresh_instagram_access_token_event');
+        wp_unschedule_event($ac_timestamp, 'ig_refresh_tokens_event');
     }
 
     // feed取得cronの削除

@@ -13,9 +13,7 @@ function instagram_feed_carousel_shortcode( $attr ) {
         'post_type' => 'instagram_feed',
         'posts_per_page' => $per_page, // 表示する投稿数
         'post_status' => 'publish', // 表示する投稿数
-        'meta_key'      => '_instagram_feed_timestamp',
-        'orderby'       => 'meta_value',
-        'order'         => 'DESC',
+        'orderby'       => 'rand',
         's'         => $word,
         'exclude_word' => $exclude_word,
     );

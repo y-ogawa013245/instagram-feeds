@@ -73,3 +73,11 @@ function iulc_headers_to_assoc(array $headers): array {
     }
     return $out;
 }
+
+function ig_graph_get($endpoint, $params, $access_token, $app_secret) {
+    $params['access_token'] = $access_token;
+    // HMAC-SHA256(token, app_secret) を16進小文字で
+    $params['appsecret_proof'] = hash_hmac('sha256', $access_token, $app_secret);
+    $url = add_query_arg($params, "https://graph.facebook.com/v20.0/{$endpoint}");
+    return wp_remote_get($url, ['timeout' => 20]);
+}
