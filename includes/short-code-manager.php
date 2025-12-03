@@ -1,17 +1,53 @@
 <?php
 // カスタム投稿タイプ 'instagram-feed' からアイキャッチを取得しカルーセルを表示するショートコード
 function instagram_feed_carousel_shortcode( $attr ) {
+    // 初期化
+    $word = isset($attr['word']) ? $attr['word'] : "";
+    $exclude_word = isset($attr['exclude_word']) ? $attr['exclude_word'] : "";
+    $per_page = isset($attr['count']) ? $attr['count'] : 20;
+    $per_page = $per_page > 50 ? 50 : $per_page;
+    $order_by = isset($attr['sort']) ? $attr['sort'] : "rand";
+    $output = "";
+
     // クエリでカスタム投稿タイプ 'instagram-feed' の投稿を取得
     $args = array(
         'post_type' => 'instagram_feed',
-        'posts_per_page' => 10, // 表示する投稿数
+        'posts_per_page' => $per_page, // 表示する投稿数
         'post_status' => 'publish', // 表示する投稿数
-        'meta_key'      => '_instagram_feed_timestamp',
-        'orderby'       => 'meta_value',
-        'order'         => 'DESC',
-        's'         => $attr['word'],
-        'exclude_word' => $attr['exclude_word'],
+        's'         => $word,
+        'exclude_word' => $exclude_word,
     );
+
+    // 並び替えの分岐
+    switch ($order_by) {
+        case 'like':
+            $args['meta_key'] = '_like_count';
+            $args['orderby']  = 'meta_value_num';
+            $args['order']    = 'DESC';
+            break;
+
+        case 'comment':
+            $args['meta_key'] = '_comment_count';
+            $args['orderby']  = 'meta_value_num';
+            $args['order']    = 'DESC';
+            break;
+
+        case 'play':
+            $args['meta_key'] = '_play_count';
+            $args['orderby']  = 'meta_value_num';
+            $args['order']    = 'DESC';
+            break;
+
+        case 'date':
+            $args['orderby'] = 'date';
+            $args['order']   = 'DESC';
+            break;
+
+        case 'rand':
+        default:
+            $args['orderby'] = 'rand';
+            break;
+    }
 
     $query = new WP_Query($args);
     
@@ -22,64 +58,92 @@ function instagram_feed_carousel_shortcode( $attr ) {
 
     // カルーセル用のHTML開始
     if($query->found_posts >= 5) {
-        $output .= '<div class="instagram-feeds">';
+        $output .= '<div class="instagram-feeds swiper swiper-container">';
     }else {
-        $output .= '<div class="instagram-feeds few-feeds">';
+        $output .= '<div class="instagram-feeds swiper swiper-container few-feeds">';
     }
     
-    // 投稿をループして、アイキャッチ画像を表示
-    while ($query->have_posts()) {
-        $query->the_post();
-        $post_id = get_the_ID();
+        $output .= '<div class="swiper-wrapper">';
 
-      // 投稿本文を取得して、20文字に制限
-        $content = get_the_content();  // 本文を取得
-        $content = wp_strip_all_tags($content);
-        $content = removeGreeting($content);
-        $trimmed_content = mb_substr($content, 0, 12);  // 15文字に制限
+        // 投稿をループして、アイキャッチ画像を表示
+        while ($query->have_posts()) {
+            $query->the_post();
+            $post_id = get_the_ID();
 
+            // 投稿本文を取得して、20文字に制限
+            $content = get_the_content();  // 本文を取得
+            $content = wp_strip_all_tags($content);
+            $content = removeGreeting($content);
+            $trimmed_content = mb_substr($content, 0, 20);  // 15文字に制限
 
-        // feedの情報を取得
-        $thumbnail_url = get_post_meta( $post_id, '_instagram_feed_thumbnail_url', true );
-        $permalink     = get_post_meta( $post_id, '_instagram_feed_permalink', true );
-        $youtube_url   = get_post_meta( $post_id, '_youtube_url', true );
-        $note_url      = get_post_meta( $post_id, '_note_url', true );
-        $menu_id       = get_post_meta( $post_id, '_menu_id', true );
-        
-        $output .= '<div class="instagram-feed">';
-        $output .= '<img loading="lazy" data-lazy="' . esc_url($thumbnail_url) . '" alt="' . esc_attr(get_the_title()) . '" />';
+            // feedの情報を取得
+            $thumbnail_url = get_post_meta( $post_id, '_instagram_feed_thumbnail_url', true );
+            $permalink     = get_post_meta( $post_id, '_instagram_feed_permalink', true );
+            $youtube_url   = get_post_meta( $post_id, '_youtube_url', true );
+            $note_url      = get_post_meta( $post_id, '_note_url', true );
+            $menu_id       = get_post_meta( $post_id, '_menu_id', true );
 
-        $output .= '<div class="buttons-area">';
-        $output .= '<p class="captions">' . $trimmed_content . '...</p>';
+            $thumb_id = get_post_meta( get_the_ID(), '_instagram_feed_thumb_id', true );
 
-        $output .= '<div class="icon-container">';
-        $output .= '<a target="_blank" href="' . $permalink . '">';
-        $output .= '<i class="fab fa-instagram"></i>';
-        $output .= '</a>';
-        if($youtube_url) {
-            $output .= '<a target="_blank" href="' . $youtube_url . '">';
-            $output .= '<i class="fab fa-youtube"></i>';
-            $output .= '</a>';
+            // ローカル保存した画像を使う(なければinstagramから)
+            if ( $thumb_id ) {
+                // WordPressが生成した適切サイズ＋srcsetが効く
+                $thumbnail_url = wp_get_attachment_image( $thumb_id, 'medium' );
+            } else {
+                // まだローカル化されてない古いデータ用のフォールバック
+                $remote = get_post_meta( get_the_ID(), '_instagram_feed_thumbnail_url', true );
+                if ( $remote ) {
+                    $thumbnail_url = '<img src="' . esc_url( $remote ) . '" alt="">';
+                }else {
+                    $thumbnail_url = '<img src="' . esc_url( $thumbnail_url ) . '" alt="">';
+                }
+            }
+
+            // サムネイル生存チェック(死んでたら飛ばす)
+            if(!check_image_exists_wp($thumbnail_url)) {
+                continue;
+            }
+            
+            // キモイけどインデント整えないとhtml読みづらくてしゃーない
+            $output .= '<div class="instagram-feed swiper-slide thumb-9-16">';
+                $output .= $thumbnail_url;
+                
+                $output .= '<div class="buttons-area">';
+                    $output .= '<p class="captions">' . $trimmed_content . '</p>';
+
+                    $output .= '<div class="icon-container">';
+                        if($permalink) {
+                            $output .= '<a target="_blank" href="' . $permalink . '">';
+                                $output .= '<i class="fab fa-instagram"></i>';
+                            $output .= '</a>';
+                        }
+
+                        if($youtube_url) {
+                            $output .= '<a target="_blank" href="' . $youtube_url . '">';
+                                $output .= '<i class="fab fa-youtube"></i>';
+                            $output .= '</a>';
+                        }
+                        if($note_url) {
+                            $output .= '<a target="_blank" href="' . $note_url . '">';
+                                $output .= '<i class="fas fa-sticky-note"></i>';
+                            $output .= '</a>';
+                        }
+                        if($menu_id) {
+                            $output .= '<a target="_blank" href="' . get_permalink($menu_id) . '">';
+                                $output .= '<i class="fa fa-shopping-cart"></i>';
+                            $output .= '</a>';
+                        }
+                    // end icon-container
+                    $output .= '</div>';
+                // end buttons-area
+                $output .= '</div>';
+            // end instagram-feed
+            $output .= '</div>';
         }
-        if($note_url) {
-            $output .= '<a target="_blank" href="' . $note_url . '">';
-            $output .= '<i class="fas fa-sticky-note"></i>';
-            $output .= '</a>';
-        }
-        if($menu_id) {
-            $output .= '<a target="_blank" href="' . get_permalink($menu_id) . '">';
-            $output .= '<i class="fa fa-shopping-cart"></i>';
-            $output .= '</a>';
-        }
-
-        // end icon-container
+    
+        // end swiper-wrapper
         $output .= '</div>';
-        // end buttons-area
-        $output .= '</div>';
-        // end instagram-feed
-        $output .= '</div>';
-    }
-  
+    
     // end instagram-feeds
     $output .= '</div>';
     
@@ -123,31 +187,35 @@ add_filter('posts_search', 'custom_search_where_for_instagram_feed', 10, 2);
 
 // プラグインのCSSを読み込む関数
 function my_plugin_enqueue_styles() {
-    $version = "0.4.2";
-    // slick-sliderのjsとcssを読み込み
-    wp_enqueue_style('slick-slider-css', 'https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.8.1/slick.min.css', $version, true);
-    wp_enqueue_style('slick-slider-theme-css', 'https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.8.1/slick-theme.min.css', $version, true);
-    wp_enqueue_script('slick-slider-js', 'https://cdnjs.cloudflare.com/ajax/libs/slick-carousel/1.8.1/slick.min.js', array('jquery'), $version, true);
-    
-    // Swiperの読み込み
-    wp_enqueue_style('swiper-css', 'https://unpkg.com/swiper/swiper-bundle.min.css', $version, true);
-    wp_enqueue_script('swiper-js', 'https://unpkg.com/swiper/swiper-bundle.min.js', array(), $version, true);
-
     // プラグインディレクトリからCSSを読み込む
+    wp_enqueue_style(
+        'swiper-css', // CSSハンドル名
+        plugin_dir_url(__FILE__) . '../asset/css/swiper-bundle.min.css', // CSSのパス
+        array(), // 依存関係（なければ空の配列）
+        filemtime(plugin_dir_url(__FILE__) . '../asset/css/swiper-bundle.min.css'), // バージョン
+        'all' // メディア（全ての画面向け）
+    );
     wp_enqueue_style(
         'instagram-feeds-style', // CSSハンドル名
         plugin_dir_url(__FILE__) . '../asset/css/style.css', // CSSのパス
         array(), // 依存関係（なければ空の配列）
-        '1.0.0', // バージョン
+        filemtime(plugin_dir_url(__FILE__) . '../asset/css/style.css'), // バージョン
         'all' // メディア（全ての画面向け）
     );
 
     // プラグインディレクトリからJSを読み込む
     wp_enqueue_script(
+        'swiper-js', // JSハンドル名
+        plugin_dir_url(__FILE__) . '../asset/js/swiper-bundle.min.js', // パス
+        array(), // 依存関係（なければ空の配列）
+        filemtime(plugin_dir_url(__FILE__) . '../asset/js/swiper-bundle.min.js'), // バージョン
+        true, // 読み込み位置指定
+    );
+    wp_enqueue_script(
         'instagram-feeds-script', // JSハンドル名
         plugin_dir_url(__FILE__) . '../asset/js/carousel-slider.js', // パス
         array(), // 依存関係（なければ空の配列）
-        '1.0.0', // バージョン
+        filemtime(plugin_dir_url(__FILE__) . '../asset/js/carousel-slider.js'), // バージョン
         true, // 読み込み位置指定
     );
 }

@@ -26,108 +26,181 @@ function create_instagram_feed_post_type() {
 }
 add_action('init', 'create_instagram_feed_post_type');
 
-// Instagram APIからフィードを取得する関数
+// Instagram APIからフィードを取得する関数（ig_get_media() 利用版）
 function fetch_instagram_feed() {
-    // instagramアカウント全部取る
-    $posts = get_all_instagram_account_posts();
+    error_log('[IG] fetch start');
 
-    foreach($posts as $post) {
-        // post_idってやつよ
-        $account_id = $post->ID;
+    // instagramアカウント全件（CPT: instagram_account）
+    $accounts = get_posts([
+        'post_type'      => 'instagram_account',
+        'post_status'    => 'any',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+    ]);
 
-        // 'instagram_account' 投稿のメタデータから API ID と Access Token を取得
-        $api_id = get_post_meta($account_id, '_instagram_api_id', true);
-        $access_token = get_post_meta($account_id, '_instagram_access_token', true);
+    if (empty($accounts)) {
+        error_log('[IG] no instagram_account posts');
+        return;
+    }
 
-        // 一応データチェック
-        if (!$api_id || !$access_token) {
-            return wp_die( new WP_Error('post_creation_failed', 'データ足りねぇゾォぉぉおお！！栗原ぁぁああああ！！'), null, array('back_link' => true) );
+    foreach ($accounts as $account_id) {
+        error_log('[IG] Feed取得開始 account=' . $account_id);
+
+        // ig_get_media() は内部で ig_user_id / ig_user_token_long / ig_app_secret を読む
+        // limit=0 => 全件（安全上限は ig_get_media 側の safety_cap）
+        $feeds = ig_get_media($account_id, 0, 15);
+
+        if (empty($feeds)) {
+            error_log("[IG] no media for account={$account_id}");
+            continue;
         }
 
-        // instagram feedを取得するためのURL
-        $api_url = 'https://graph.facebook.com/v20.0/' . $api_id . '/media?fields=id,caption,thumbnail_url,media_type,media_url,permalink,timestamp&limit=50&access_token=' . $access_token;
-        $all_feeds = array();
-
-        // ページネーションで全てのフィードを取得
-        while ($api_url) {
-            // APIリクエストを送信
-            $response = wp_remote_get($api_url);
-
-            // エラーチェック
-            if (is_wp_error($response)) {
-                return wp_die( new WP_Error('post_creation_failed', $response->get_error_message()), null, array('back_link' => true) );
+        foreach ($feeds as $feed_item) {
+            // カルーセルはスキップ（必要なら拡張）
+            if (!empty($feed_item['media_type']) && $feed_item['media_type'] === 'CAROUSEL_ALBUM') {
+                continue;
             }
 
-            // レスポンスの内容を取得
-            $body = wp_remote_retrieve_body($response);
-            $data = json_decode($body, true);
+            $feed_id   = $feed_item['id']         ?? '';
+            $caption   = $feed_item['caption']    ?? '';
+            $permalink = $feed_item['permalink']  ?? '';
+            $timestamp = $feed_item['timestamp']  ?? '';
+            $like_count    = isset($feed_item['like_count']) ? (int) $feed_item['like_count'] : 0;
+            $comment_count = isset($feed_item['comments_count']) ? (int) $feed_item['comments_count'] : 0;
+            $play_count    = isset($feed_item['video_play_count']) ? (int) $feed_item['video_play_count'] : 0;
 
-            if (!isset($data['data'])) {
-                return wp_die( new WP_Error('post_creation_failed', '取れてないんですけお！'), null, array('back_link' => true) );
+
+            // 画像/動画の表示URL（動画はサムネイルを採用）
+            $image_url = '';
+            if (!empty($feed_item['media_type']) && $feed_item['media_type'] === 'IMAGE') {
+                $image_url = $feed_item['media_url'] ?? '';
+            } else {
+                $image_url = $feed_item['thumbnail_url'] ?? ($feed_item['media_url'] ?? '');
             }
 
-            // 取得したフィードを追加
-            $all_feeds = array_merge($all_feeds, $data['data']);
+            // 既存ポスト有無チェック
+            $existing = new WP_Query([
+                'post_type'  => 'instagram_feed',
+                'meta_key'   => '_instagram_feed_id',
+                'meta_value' => $feed_id,
+                'fields'     => 'ids',
+                'posts_per_page' => 1,
+            ]);
 
-            // 次のページがあるか確認
-            $api_url = isset($data['paging']['next']) ? $data['paging']['next'] : null;
-        }
+            if ($existing->have_posts()) {
+                // 既存 → サムネイル生存チェックのみ（必要ならpublishへ戻す）
+                $existing->the_post();
+                $post_id = get_the_ID();
 
-        // 取得したfeedをカスタム投稿タイプ「instagram-feed」として保存
-        foreach ($all_feeds as $feed_item) {
-            // カルーセルタイプだったらめんどいのでスキップ
-            if ($feed_item['media_type'] == 'CAROUSEL_ALBUM') {
-                continue; 
-            }
+                // 既存 → サムネ生存チェック
+                $existing_url = get_post_meta($post_id, '_instagram_feed_thumbnail_url', true);
+                $alive = true;
+                if (function_exists('check_image_exists_wp') && !empty($existing_url)) {
+                    $alive = check_image_exists_wp($existing_url);
+                }
 
-            // Instagramのフィードがすでに保存されているか確認
-            $existing_feed = new WP_Query(array(
-                'post_type' => 'instagram_feed',
-                'meta_key' => '_instagram_feed_id',
-                'meta_value' => $feed_item['id'],
-            ));
+                if (!$alive) {
+                    // 期限切れ検知 → Graph から詳細取得
+                    $media = ig_fetch_media_details($account_id, $feed_id);
 
-            // すでに存在する場合は登録はしない
-            if (!$existing_feed->have_posts()) {
-                // 新しい投稿を作成
-                $post_id = wp_insert_post(array(
-                    'post_title' => wp_trim_words($feed_item['caption'], 10, '...'),
-                    'post_content' => $feed_item['caption'],
-                    'post_status' => 'publish',
-                    'post_type' => 'instagram_feed',
-                ));
-            }else {
-                // 更新のためにpost_idとっとく
-                while($existing_feed->have_posts()) {
-                    $existing_feed->the_post();
-                    $post_id = get_the_ID();
+                    if (is_wp_error($media)) {
+                        // 代表的なケース:
+                        // - code=100 sub=33（オブジェクト無し）= 削除/非公開の可能性大
+                        // - code=10/200（許可なし）= 非公開や権限不足
+                        $data = $media->get_error_data();
+                        $code = is_array($data) ? ($data['code'] ?? 0) : 0;
+                        $sub  = is_array($data) ? ($data['error_subcode'] ?? 0) : 0;
+
+                        // ここは保守的に "非公開/不可視" 扱い
+                        wp_update_post(['ID' => $post_id, 'post_status' => 'private']);
+                        error_log("[IG feed] refresh failed, code={$code} sub={$sub} -> private: {$post_id}");
+                    } else {
+                        // Graphは取れた → Instagram上の公開可否を確認
+                        $permalink = $media['permalink'] ?? '';
+                        $is_public = ig_permalink_is_public($permalink);
+
+                        if (!$is_public) {
+                            // Instagram側で非公開になった
+                            wp_update_post(['ID' => $post_id, 'post_status' => 'private']);
+                            error_log("[IG feed] instagram not public -> private: {$post_id}");
+                        } else {
+                            // 公開されている → サムネURLを更新して publish
+                            $new_url  = ig_pick_display_image_url($media);
+                            $ts       = $media['timestamp'] ?? '';
+                            $unix     = $ts ? (is_numeric($ts) ? intval($ts) : strtotime($ts)) : 0;
+
+                            if (!empty($new_url)) {
+                                update_post_meta($post_id, '_instagram_feed_thumbnail_url', $new_url);
+                                $image_url = $new_url;
+                            }
+                            if (!empty($permalink)) {
+                                update_post_meta($post_id, '_instagram_feed_permalink', $permalink);
+                            }
+                            if (!empty($ts)) {
+                                update_post_meta($post_id, '_instagram_feed_timestamp', $ts);
+                            }
+                            if ($unix) {
+                                update_post_meta($post_id, '_instagram_feed_timestamp_unix', $unix);
+                            }
+
+                            wp_update_post(['ID' => $post_id, 'post_status' => 'publish']);
+                            error_log("[IG feed] thumb refreshed -> publish: {$post_id}");
+                        }
+                    }
+                } else {
+                    // サムネが生きてる → 公開維持
+                    wp_update_post(['ID' => $post_id, 'post_status' => 'publish']);
+                }
+            } else {
+                // 新規作成
+                $post_id = wp_insert_post([
+                    'post_title'   => wp_trim_words($caption, 10, '...'),
+                    'post_content' => $caption,
+                    'post_status'  => 'publish',
+                    'post_type'    => 'instagram_feed',
+                ]);
+
+                if (is_wp_error($post_id) || !$post_id) {
+                    error_log('[IG feed] insert failed: ' . (is_wp_error($post_id) ? $post_id->get_error_message() : 'unknown'));
+                    continue;
                 }
             }
 
-            // 動画サムネイルか画像かでパスが違う
-            $image_url = $feed_item['media_type'] == 'IMAGE'
-                     ? $feed_item['media_url']
-                     : $feed_item['thumbnail_url'];
+            if (!empty($post_id)) {
+                // captionからYouTube URL抽出
+                $youtube_url = '';
+                if (!empty($caption)) {
+                    $youtube_regex = '/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/|v\/|user\/\S+|channel\/\S+|c\/\S+)|youtu\.be\/)([\w\-]{11})/';
+                    if (preg_match($youtube_regex, $caption, $m)) {
+                        $youtube_url = $m[0];
+                    }
+                }
 
-            // captionからyoutubeのurlを抽出する
-            $youtube_url = "";
-            $youtube_regex = '/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/|embed\/|v\/|user\/\S+|channel\/\S+|c\/\S+)|youtu\.be\/)([\w\-]{11})/';
-            if (preg_match($youtube_regex, $feed_item['caption'], $matches)) {
-                $youtube_url = $matches[0];
-            }
-
-            // 念のためpost_idがる時しか更新しない
-            if ($post_id) {
-                // カスタムフィールドにデータを保存
-                update_post_meta($post_id, '_instagram_api_id', $api_id);
-                update_post_meta($post_id, '_instagram_feed_id', $feed_item['id']);
-                update_post_meta($post_id, '_instagram_feed_permalink', $feed_item['permalink']);
+                // メタ更新
+                update_post_meta($post_id, '_instagram_api_id', get_post_meta($account_id, 'ig_user_id', true)); // 参考: アカウント側のIGユーザID
+                update_post_meta($post_id, '_instagram_feed_id', $feed_id);
+                update_post_meta($post_id, '_instagram_feed_permalink', $permalink);
                 update_post_meta($post_id, '_instagram_feed_thumbnail_url', $image_url);
-                update_post_meta($post_id, '_instagram_feed_timestamp', $feed_item['timestamp']);
+                update_post_meta($post_id, '_instagram_feed_timestamp', $timestamp);
+                update_post_meta($post_id, '_like_count', $like_count);
+                update_post_meta($post_id, '_comment_count', $comment_count);
+                update_post_meta($post_id, '_play_count', $play_count);
                 update_post_meta($post_id, '_youtube_url', $youtube_url);
+
+                // ★★★ ここでローカルに画像を取り込む ★★★
+                if ( ! empty( $image_url ) ) {
+                    $local_att_id = ig_sideload_image_and_attach( $post_id, $image_url );
+                    if ( $local_att_id ) {
+                        error_log("[IG feed] sideloaded local thumb att_id={$local_att_id} for post_id={$post_id}");
+                    }
+                }
+
+                error_log("[IG feed] upserted post_id={$post_id} thumb={$image_url}");
             }
         }
     }
+
+    error_log('[IG] fetch done');
 }
 // Cronジョブのイベントにfetch_instagram_feed関数を登録
 add_action('fetch_instagram_feed_event', 'fetch_instagram_feed');
@@ -255,3 +328,135 @@ function save_instagram_feed_meta($post_id) {
     }
 }
 add_action('save_post_instagram_feed', 'save_instagram_feed_meta');
+
+// カスタムスケジュールの追加
+// 最初は2ヶ月ごとだったけど、2ヶ月で切れるんだから余裕もって1ヶ月じゃないとダメじゃね？
+function add_custom_cron_schedule($schedules) {
+    $schedules['bi_monthly'] = array(
+        'interval' => 60 * 60 * 24 * 30, // 2ヶ月 (60日)
+        'display' => __('Every 1 Months')
+    );
+    return $schedules;
+}
+add_filter('cron_schedules', 'add_custom_cron_schedule');
+
+
+/** instagramサムネイル生存確認 + 延命 */
+// --- Graph API: メディア詳細取得（成功:配列 / 失敗:WP_Error）---
+function ig_fetch_media_details($account_id, $media_id) {
+    $token = get_post_meta($account_id, 'ig_user_token_long', true);
+    if (!$token || !$media_id) {
+        return new WP_Error('ig_param', 'missing token or media_id');
+    }
+
+    $endpoint = add_query_arg([
+        'fields'       => 'id,media_type,media_url,thumbnail_url,permalink,timestamp',
+        'access_token' => $token,
+    ], "https://graph.instagram.com/{$media_id}");
+
+    $res = wp_remote_get($endpoint, ['timeout' => 10]);
+    if (is_wp_error($res)) return $res;
+
+    $code = wp_remote_retrieve_response_code($res);
+    $body = json_decode(wp_remote_retrieve_body($res), true);
+
+    if ($code >= 200 && $code < 300 && is_array($body) && !isset($body['error'])) {
+        return $body; // 正常
+    }
+    // Graph 側のエラーはここへ
+    $err = isset($body['error']) ? $body['error'] : ['message' => 'unknown', 'code' => 0, 'error_subcode' => 0];
+    return new WP_Error('ig_graph', sprintf('Graph error: %s (code=%s sub=%s)',
+        $err['message'] ?? 'unknown', $err['code'] ?? 'n/a', $err['error_subcode'] ?? 'n/a'
+    ), $err);
+}
+
+// --- 公開可否の推定：permalink を叩いてログイン壁かどうかを見る ---
+function ig_permalink_is_public($permalink) {
+    if (empty($permalink)) return false;
+
+    $res = wp_remote_get($permalink, [
+        'timeout'      => 8,
+        'redirection'  => 5,
+        'user-agent'   => 'WordPress; instagram-check',
+    ]);
+    if (is_wp_error($res)) return false;
+
+    $body = wp_remote_retrieve_body($res);
+    $code = wp_remote_retrieve_response_code($res);
+
+    if ($code >= 400) return false;
+    if (!is_string($body) || $body === '') return false;
+
+    // ログインページの典型文言（多言語も考慮してゆるめ判定）
+    $login_markers = [
+        'Login • Instagram',           // 英語
+        'Log in • Instagram',
+        'ログイン • Instagram',        // 日本語
+        'Войти • Instagram',           // 露
+        'Entrar • Instagram',          // 西/葡
+        'Se connecter • Instagram',    // 仏
+    ];
+    foreach ($login_markers as $m) {
+        if (strpos($body, $m) !== false) return false;
+    }
+    // og:site_name が Instagram で、タイトルがログイン系でなければ公開扱い
+    if (strpos($body, 'property="og:site_name" content="Instagram"') !== false) {
+        return true;
+    }
+    return true; // 最後は緩めに true（404 等は前段で弾く）
+}
+
+// --- media_typeに応じた見出し画像URLを決定 ---
+function ig_pick_display_image_url($media) {
+    $type = $media['media_type'] ?? '';
+    if ($type === 'IMAGE') {
+        return $media['media_url'] ?? '';
+    }
+    // VIDEO / CAROUSEL_ALBUM などは thumbnail_url 優先
+    return $media['thumbnail_url'] ?? ($media['media_url'] ?? '');
+}
+
+/**
+ * InstagramのサムネイルURLをダウンロードして
+ * ・メディアに登録
+ * ・CPT instagram_feed のアイキャッチに設定
+ * 成功したら attachment_id を返す
+ */
+function ig_sideload_image_and_attach( $post_id, $image_url ) {
+    if ( empty( $post_id ) || empty( $image_url ) ) {
+        return false;
+    }
+
+    // 必要なWPコア関数が読み込まれてなければインクルード
+    if ( ! function_exists( 'media_sideload_image' ) ) {
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+    }
+
+    // すでにローカル画像があれば再ダウンロードしない
+    $existing_att_id = get_post_meta( $post_id, '_instagram_feed_thumb_id', true );
+    if ( $existing_att_id && get_post( $existing_att_id ) ) {
+        return (int) $existing_att_id;
+    }
+
+    // 画像をサイドロード（DL & 添付ファイル登録）
+    // 第4引数に 'id' を渡すと attachment_id が返る（WP 5.3+）
+    $att_id = media_sideload_image( $image_url, $post_id, null, 'id' );
+
+    if ( is_wp_error( $att_id ) ) {
+        error_log( '[IG feed] media_sideload_image failed: ' . $att_id->get_error_message() );
+        return false;
+    }
+
+    // アイキャッチに設定
+    set_post_thumbnail( $post_id, $att_id );
+
+    // 後でテンプレから使えるよう attachment_id もメタに保存
+    update_post_meta( $post_id, '_instagram_feed_thumb_id', (int) $att_id );
+
+    // 元のリモートURLも控えておく（デバッグ用・フォールバック用）
+    update_post_meta( $post_id, '_instagram_feed_thumbnail_url_remote', esc_url_raw( $image_url ) );
+
+    return (int) $att_id;
+}

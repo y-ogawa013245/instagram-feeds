@@ -1,20 +1,26 @@
 jQuery(document).ready(function($) {
-    $(".instagram-feeds").slick({
-        swipeToSlide: true,
-        slidesToShow: 6,
-        slidesToScroll: 99,
-        infinite: true,
-        arrows: false, // 前へ・次へのページ送りボタンを表示
-        dots: false, // ナビゲーションドットを非表示
-        lazyLoad: 'progressive',
-        cssEase: 'linear',
-        speed: 0,
-        responsive: [{
-            breakpoint: 769,
-            settings: {
-                slidesToShow: 3,
-                slidesToScroll: 99,
-            }
-        }]
-    }); 
+    const swiper = new Swiper('.swiper-container', {
+        // デフォでスマホサイズの設定
+        speed: 40,
+        slidesPerView: 3,
+        maxBackfaceHiddenSlides: 3,
+        spaceBetween: 10,
+        freeMode: true,
+        centeredSlides: false,
+        preloadImages: false,
+        breakpoints: {
+            // スマホ最大幅640px想定
+            // 640px以上はタブレット判定
+            640: {
+                slidesPerView: 5,
+                maxBackfaceHiddenSlides: 5,
+            },
+            // タブレット最大幅1024px想定
+            // 1024px以上はパソコン判定
+            1024: {
+                slidesPerView: 7,
+                maxBackfaceHiddenSlides: 7,
+            },
+        }        
+    });
 });
