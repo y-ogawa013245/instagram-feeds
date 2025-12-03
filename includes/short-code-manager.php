@@ -6,6 +6,7 @@ function instagram_feed_carousel_shortcode( $attr ) {
     $exclude_word = isset($attr['exclude_word']) ? $attr['exclude_word'] : "";
     $per_page = isset($attr['count']) ? $attr['count'] : 20;
     $per_page = $per_page > 50 ? 50 : $per_page;
+    $order_by = isset($attr['sort']) ? $attr['sort'] : "rand";
     $output = "";
 
     // クエリでカスタム投稿タイプ 'instagram-feed' の投稿を取得
@@ -13,10 +14,40 @@ function instagram_feed_carousel_shortcode( $attr ) {
         'post_type' => 'instagram_feed',
         'posts_per_page' => $per_page, // 表示する投稿数
         'post_status' => 'publish', // 表示する投稿数
-        'orderby'       => 'rand',
         's'         => $word,
         'exclude_word' => $exclude_word,
     );
+
+    // 並び替えの分岐
+    switch ($order_by) {
+        case 'like':
+            $args['meta_key'] = '_like_count';
+            $args['orderby']  = 'meta_value_num';
+            $args['order']    = 'DESC';
+            break;
+
+        case 'comment':
+            $args['meta_key'] = '_comment_count';
+            $args['orderby']  = 'meta_value_num';
+            $args['order']    = 'DESC';
+            break;
+
+        case 'play':
+            $args['meta_key'] = '_play_count';
+            $args['orderby']  = 'meta_value_num';
+            $args['order']    = 'DESC';
+            break;
+
+        case 'date':
+            $args['orderby'] = 'date';
+            $args['order']   = 'DESC';
+            break;
+
+        case 'rand':
+        default:
+            $args['orderby'] = 'rand';
+            break;
+    }
 
     $query = new WP_Query($args);
     
@@ -52,6 +83,22 @@ function instagram_feed_carousel_shortcode( $attr ) {
             $note_url      = get_post_meta( $post_id, '_note_url', true );
             $menu_id       = get_post_meta( $post_id, '_menu_id', true );
 
+            $thumb_id = get_post_meta( get_the_ID(), '_instagram_feed_thumb_id', true );
+
+            // ローカル保存した画像を使う(なければinstagramから)
+            if ( $thumb_id ) {
+                // WordPressが生成した適切サイズ＋srcsetが効く
+                $thumbnail_url = wp_get_attachment_image( $thumb_id, 'medium' );
+            } else {
+                // まだローカル化されてない古いデータ用のフォールバック
+                $remote = get_post_meta( get_the_ID(), '_instagram_feed_thumbnail_url', true );
+                if ( $remote ) {
+                    $thumbnail_url = '<img src="' . esc_url( $remote ) . '" alt="">';
+                }else {
+                    $thumbnail_url = '<img src="' . esc_url( $thumbnail_url ) . '" alt="">';
+                }
+            }
+
             // サムネイル生存チェック(死んでたら飛ばす)
             if(!check_image_exists_wp($thumbnail_url)) {
                 continue;
@@ -59,7 +106,7 @@ function instagram_feed_carousel_shortcode( $attr ) {
             
             // キモイけどインデント整えないとhtml読みづらくてしゃーない
             $output .= '<div class="instagram-feed swiper-slide thumb-9-16">';
-                $output .= '<img src="' . esc_url($thumbnail_url) . '" alt="' . esc_attr(get_the_title()) . '" />';
+                $output .= $thumbnail_url;
                 
                 $output .= '<div class="buttons-area">';
                     $output .= '<p class="captions">' . $trimmed_content . '</p>';
@@ -140,13 +187,14 @@ add_filter('posts_search', 'custom_search_where_for_instagram_feed', 10, 2);
 
 // プラグインのCSSを読み込む関数
 function my_plugin_enqueue_styles() {
-    $version = "0.4.6";
-    
-    // Swiperの読み込み
-    wp_enqueue_style('swiper-css', 'https://unpkg.com/swiper/swiper-bundle.min.css', $version, true);
-    wp_enqueue_script('swiper-js', 'https://unpkg.com/swiper/swiper-bundle.min.js', array(), $version, true);
-
     // プラグインディレクトリからCSSを読み込む
+    wp_enqueue_style(
+        'swiper-css', // CSSハンドル名
+        plugin_dir_url(__FILE__) . '../asset/css/swiper-bundle.min.css', // CSSのパス
+        array(), // 依存関係（なければ空の配列）
+        filemtime(plugin_dir_url(__FILE__) . '../asset/css/swiper-bundle.min.css'), // バージョン
+        'all' // メディア（全ての画面向け）
+    );
     wp_enqueue_style(
         'instagram-feeds-style', // CSSハンドル名
         plugin_dir_url(__FILE__) . '../asset/css/style.css', // CSSのパス
@@ -156,6 +204,13 @@ function my_plugin_enqueue_styles() {
     );
 
     // プラグインディレクトリからJSを読み込む
+    wp_enqueue_script(
+        'swiper-js', // JSハンドル名
+        plugin_dir_url(__FILE__) . '../asset/js/swiper-bundle.min.js', // パス
+        array(), // 依存関係（なければ空の配列）
+        filemtime(plugin_dir_url(__FILE__) . '../asset/js/swiper-bundle.min.js'), // バージョン
+        true, // 読み込み位置指定
+    );
     wp_enqueue_script(
         'instagram-feeds-script', // JSハンドル名
         plugin_dir_url(__FILE__) . '../asset/js/carousel-slider.js', // パス

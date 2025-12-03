@@ -22,20 +22,19 @@
     aspect-ratio: 9 / 16;    /* 9:16の縦長枠を作る */
     overflow: hidden;        /* はみ出した部分を隠す */
     border-radius: 8px;      /* お好みで角丸 */
-  }
-  
-  .thumb-9-16 img {
+}
+
+.thumb-9-16 img {
     width: 100%;
     height: 100%;
     object-fit: cover;       /* 余分をトリミング */
     object-position: 50% 50%;/* 中央を基準にトリミング */
-  }
-  
+}
 
 /* マウスオーバーで拡大する効果 */
 .instagram-feed:hover {
     transform: scale(1.1); /* 画像を1.2倍に拡大 */
-    z-index: 30;
+    z-index: 99;
 }
 
 .instagram-feed:hover .buttons-area {
@@ -54,7 +53,7 @@
 }
 
 .buttons-area .captions {
-    font-size: clamp(0.7rem, calc(0.2rem + 1vw), 3rem);
+    font-size: clamp(0.7rem, calc(0.1rem + 0.7vw), 1.5rem);
     margin-bottom: 4%;
 }
 
@@ -67,7 +66,7 @@
 }
 
 .icon-container i {
-    font-size: clamp(1rem, calc(0.1rem + 2vw), 2rem);
+    font-size: clamp(1rem, calc(0.1rem + 1vw), 2rem);
     flex: 1 1 20%; /* 横幅を20%に設定し、レスポンシブに対応 */
     text-align: center; /* 中央揃え */
 }

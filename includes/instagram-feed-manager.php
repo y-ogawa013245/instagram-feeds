@@ -65,6 +65,10 @@ function fetch_instagram_feed() {
             $caption   = $feed_item['caption']    ?? '';
             $permalink = $feed_item['permalink']  ?? '';
             $timestamp = $feed_item['timestamp']  ?? '';
+            $like_count    = isset($feed_item['like_count']) ? (int) $feed_item['like_count'] : 0;
+            $comment_count = isset($feed_item['comments_count']) ? (int) $feed_item['comments_count'] : 0;
+            $play_count    = isset($feed_item['video_play_count']) ? (int) $feed_item['video_play_count'] : 0;
+
 
             // 画像/動画の表示URL（動画はサムネイルを採用）
             $image_url = '';
@@ -127,6 +131,7 @@ function fetch_instagram_feed() {
 
                             if (!empty($new_url)) {
                                 update_post_meta($post_id, '_instagram_feed_thumbnail_url', $new_url);
+                                $image_url = $new_url;
                             }
                             if (!empty($permalink)) {
                                 update_post_meta($post_id, '_instagram_feed_permalink', $permalink);
@@ -137,10 +142,6 @@ function fetch_instagram_feed() {
                             if ($unix) {
                                 update_post_meta($post_id, '_instagram_feed_timestamp_unix', $unix);
                             }
-
-                            // （任意）ローカルに取り込みたい場合
-                            // $local = ig_sideload_image_and_attach($post_id, $new_url);
-                            // if ($local) update_post_meta($post_id, '_instagram_feed_local_url', $local);
 
                             wp_update_post(['ID' => $post_id, 'post_status' => 'publish']);
                             error_log("[IG feed] thumb refreshed -> publish: {$post_id}");
@@ -181,7 +182,18 @@ function fetch_instagram_feed() {
                 update_post_meta($post_id, '_instagram_feed_permalink', $permalink);
                 update_post_meta($post_id, '_instagram_feed_thumbnail_url', $image_url);
                 update_post_meta($post_id, '_instagram_feed_timestamp', $timestamp);
+                update_post_meta($post_id, '_like_count', $like_count);
+                update_post_meta($post_id, '_comment_count', $comment_count);
+                update_post_meta($post_id, '_play_count', $play_count);
                 update_post_meta($post_id, '_youtube_url', $youtube_url);
+
+                // ★★★ ここでローカルに画像を取り込む ★★★
+                if ( ! empty( $image_url ) ) {
+                    $local_att_id = ig_sideload_image_and_attach( $post_id, $image_url );
+                    if ( $local_att_id ) {
+                        error_log("[IG feed] sideloaded local thumb att_id={$local_att_id} for post_id={$post_id}");
+                    }
+                }
 
                 error_log("[IG feed] upserted post_id={$post_id} thumb={$image_url}");
             }
@@ -402,4 +414,49 @@ function ig_pick_display_image_url($media) {
     }
     // VIDEO / CAROUSEL_ALBUM などは thumbnail_url 優先
     return $media['thumbnail_url'] ?? ($media['media_url'] ?? '');
+}
+
+/**
+ * InstagramのサムネイルURLをダウンロードして
+ * ・メディアに登録
+ * ・CPT instagram_feed のアイキャッチに設定
+ * 成功したら attachment_id を返す
+ */
+function ig_sideload_image_and_attach( $post_id, $image_url ) {
+    if ( empty( $post_id ) || empty( $image_url ) ) {
+        return false;
+    }
+
+    // 必要なWPコア関数が読み込まれてなければインクルード
+    if ( ! function_exists( 'media_sideload_image' ) ) {
+        require_once ABSPATH . 'wp-admin/includes/media.php';
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+    }
+
+    // すでにローカル画像があれば再ダウンロードしない
+    $existing_att_id = get_post_meta( $post_id, '_instagram_feed_thumb_id', true );
+    if ( $existing_att_id && get_post( $existing_att_id ) ) {
+        return (int) $existing_att_id;
+    }
+
+    // 画像をサイドロード（DL & 添付ファイル登録）
+    // 第4引数に 'id' を渡すと attachment_id が返る（WP 5.3+）
+    $att_id = media_sideload_image( $image_url, $post_id, null, 'id' );
+
+    if ( is_wp_error( $att_id ) ) {
+        error_log( '[IG feed] media_sideload_image failed: ' . $att_id->get_error_message() );
+        return false;
+    }
+
+    // アイキャッチに設定
+    set_post_thumbnail( $post_id, $att_id );
+
+    // 後でテンプレから使えるよう attachment_id もメタに保存
+    update_post_meta( $post_id, '_instagram_feed_thumb_id', (int) $att_id );
+
+    // 元のリモートURLも控えておく（デバッグ用・フォールバック用）
+    update_post_meta( $post_id, '_instagram_feed_thumbnail_url_remote', esc_url_raw( $image_url ) );
+
+    return (int) $att_id;
 }

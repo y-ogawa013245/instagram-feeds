@@ -308,6 +308,7 @@ function ig_get_media($post_id, $limit = 0, $cache_minutes = 15) {
     $app_secret = get_post_meta($post_id, 'ig_app_secret', true);
 
     if (!$ig_user_id || !$token || !$app_secret) {
+        error_log('credential nothing');
         return [];
     }
 
@@ -318,7 +319,7 @@ function ig_get_media($post_id, $limit = 0, $cache_minutes = 15) {
     if ($cached !== false) return $cached;
 
     // 取得フィールド
-    $base_fields = 'id,caption,media_type,media_url,permalink,timestamp,thumbnail_url';
+    $base_fields = 'id,caption,media_type,media_url,permalink,timestamp,thumbnail_url,like_count,comments_count,video_play_count';
 
     // 1ページのサイズ（最大100が目安）
     $page_size = 100;
@@ -356,6 +357,7 @@ function ig_get_media($post_id, $limit = 0, $cache_minutes = 15) {
             error_log("ig_get_media: HTTP {$code} body={$body}");
             break;
         }
+            error_log("ig_get_media: HTTP {$code} body={$body}");
 
         $json = json_decode($body, true);
         $data = isset($json['data']) && is_array($json['data']) ? $json['data'] : [];

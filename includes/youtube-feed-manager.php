@@ -31,6 +31,39 @@ function is_youtube_short($video_id) {
     return false;
 }
 
+function yt_fetch_video_stats( $video_id, $api_key ) {
+    if ( empty( $video_id ) || empty( $api_key ) ) {
+        return false;
+    }
+
+    $api_url = add_query_arg([
+        'key'  => $api_key,
+        'id'   => $video_id,
+        'part' => 'statistics',
+    ], 'https://www.googleapis.com/youtube/v3/videos');
+
+    $response = wp_remote_get( $api_url, [ 'timeout' => 10 ] );
+
+    if ( is_wp_error( $response ) ) {
+        error_log("[YouTube Stats] API request failed: " . $response->get_error_message());
+        return false;
+    }
+
+    $body = json_decode( wp_remote_retrieve_body( $response ), true );
+    if ( empty( $body['items'][0]['statistics'] ) ) {
+        error_log("[YouTube Stats] No statistics for video: {$video_id}");
+        return false;
+    }
+
+    $stats = $body['items'][0]['statistics'];
+
+    return [
+        'view'    => isset( $stats['viewCount'] )    ? (int) $stats['viewCount']    : 0,
+        'like'    => isset( $stats['likeCount'] )    ? (int) $stats['likeCount']    : 0,
+        'comment' => isset( $stats['commentCount'] ) ? (int) $stats['commentCount'] : 0,
+    ];
+}
+
 /**
  * YouTube Shorts フィード取得（ページネーション対応）
  */
@@ -108,24 +141,6 @@ function fetch_youtube_shorts_feed($account_post_id) {
 
             // 登録済みの場合、サムネイルの存在チェックを行い、死んでいたらpost非公開
             if (!empty($existing)) {
-                // // 投稿ID取得
-                // $exsiting_id = $existing[0]->ID;
-                
-                // // サムネイルURL取得
-                // $exsiting_url = get_post_meta( $exsiting_id, '_instagram_feed_thumbnail_url', true );
-
-                // // サムネイル画像の生存チェック
-                // if(!check_image_exists_wp($exsiting_url)) {
-                //     // し、死んでる.....!!
-                //     wp_update_post([
-                //         'ID'          => $exsiting_id,       // 対象の投稿ID
-                //         'post_status' => 'private',      // 非公開
-                //     ]);
-                    
-
-                //     error_log("[YouTube Shorts] noexisting thumbnail, delete: {$video_id}");
-                // }
-
                 error_log("[YouTube Fetch] Duplicate found, skipping: {$video_id}");
                 continue;
             }
@@ -146,6 +161,14 @@ function fetch_youtube_shorts_feed($account_post_id) {
             update_post_meta($post_id, '_instagram_feed_thumbnail_url', esc_url_raw($thumbnail));
             update_post_meta($post_id, '_youtube_url', $short_url);
             update_post_meta($post_id, '_instagram_feed_timestamp', strtotime($published_at));
+
+            // ★ ここで統計情報を取りにいく
+            $stats = yt_fetch_video_stats( $video_id, $api_key );
+            if ( $stats ) {
+                update_post_meta( $post_id, '_play_count',    $stats['view'] );
+                update_post_meta( $post_id, '_like_count',    $stats['like'] );
+                update_post_meta( $post_id, '_comment_count', $stats['comment'] );
+            }
 
             error_log("[YouTube Fetch] Saved new post for video: {$video_id}");
             $fetched_count++;
